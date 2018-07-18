@@ -1,0 +1,868 @@
+#!/usr/bin/env php
+<?php
+set_time_limit(0);
+
+if(!isset($argv[1])){
+   gitFtpClient::displayHome();
+   exit;
+}
+
+$keyword = trim($argv[1]);
+
+switch($keyword){
+	case 'init':
+		gitFtpClient::init();
+	break;
+	case 'config':
+		gitFtpClient::config(trim($argv[2]),trim($argv[3]));
+	break;
+	case 'remote':
+		$params = array();
+		if($argv){
+			foreach($argv as $k=>$val){
+				if($k>2) $params[] = trim($val);
+			}
+		}
+		gitFtpClient::remote(trim($argv[2]),$params);
+	break;
+	case 'login':
+		if(isset($argv[2]) && $argv[3]){
+			gitFtpClient::login(trim($argv[2]),trim($argv[3]));
+		}else{
+			gitFtpClient::doLogin();
+		}
+	break;
+	case 'add':
+		gitFtpClient::checkLogin();
+		gitFtpClient::add(trim($argv[2]));
+	break;
+	case 'commit':
+		gitFtpClient::checkLogin();
+		gitFtpClient::commit();
+	break;
+	case 'push':
+		gitFtpClient::checkLogin();
+		if(isset($argv[2])){
+			gitFtpClient::push(trim($argv[2])); //上传当前指定的目录
+		}else{
+			gitFtpClient::push(); //默认上传UPDATE_PATH
+		}
+	break;
+	case 'pull':
+		gitFtpClient::checkLogin();
+		if(isset($argv[2])){
+			gitFtpClient::pull(trim($argv[2]));
+		}else{
+			gitFtpClient::pull();
+		}
+		
+	break;
+	case 'version':
+	case '-v':
+		echo "================================================================== \n";
+		echo "                                                                   \n";
+		echo 'version: ' . gitFtpClient::VERSION ."\n";
+		echo 'name: ' . gitFtpClient::AUTHOR_NAME."\n";
+		echo 'email: ' . gitFtpClient::AUTHOR_EMAIL."\n";
+		echo 'date: ' . gitFtpClient::AUTHOR_DATE."\n";
+		echo "                                                                   \n";
+		echo "================================================================== \n";
+		exit;
+	break;
+	case '-h':
+	case 'help':
+		gitFtpClient::displayHelp();
+	break;
+	default:
+		echo "\n\n";
+		gitFtpClient::displayHome();
+		gitFtpClient::displayHelp();
+}
+
+class gitFtpClient{
+	const VERSION = 'v1.001';
+	const AUTHOR_NAME = 'yuanzhongyi';
+	const AUTHOR_EMAIL = 'kld230@163.com';
+	const AUTHOR_DATE = '2018-07-16';
+	const SERVER_HOST = '127.0.0.1';
+	const SERVER_PORT = '8333';
+	const ROOT = '.gitftp';
+	const CACHE_PATH = '.gitftp/cache/';
+	const INDEX_PATH = '.gitftp/index/';
+	const DATA_PATH = '.gitftp/data/';
+	const UPDATA_PATH = '.gitftp/update/';
+	const PULL_PATH = '.';
+	const CONFIG = '.gitftp/config';
+	const LOGIN = '.gitftp/login';
+	const USER = '.gitftp/user';
+	const TOKEN = '.gitftp/token';
+	const HOST = '.gitftp/host';
+	static $client = null;
+	static $loginStatus = null;
+	static $username = null;
+	const PACKAGE_HEAD_LEN = 5;
+	static $packageCount = 0;
+	
+	public static function init(){
+		
+		self::displayHome();
+		
+		self::clear(self::DATA_PATH);
+		self::clear(self::CACHE_PATH);
+		self::clear(self::INDEX_PATH);
+		self::clear(self::UPDATA_PATH);
+		self::clear(self::ROOT);
+		if(!is_dir(self::DATA_PATH)) mkdir(self::DATA_PATH,0777,true);
+		if(!is_dir(self::CACHE_PATH)) mkdir(self::CACHE_PATH,0777,true);
+		if(!is_dir(self::INDEX_PATH)) mkdir(self::INDEX_PATH,0777,true);
+		if(!is_dir(self::UPDATA_PATH)) mkdir(self::UPDATA_PATH,0777,true);
+		if(is_dir(self::ROOT)) popen("attrib +h +i " . self::ROOT,"w");
+		
+		exit(" Please set up your account ! ");
+	}
+	
+	public static function config($key,$value){
+		self::account($key,$value);
+	}
+	
+	public static function remote($command,$params = array()){
+		switch($command){
+			case 'add':
+				if(self::setConfig($params[0],$params[1])){
+					exit(" Configuration file has been updated ! \n");
+				}else{
+					exit(" operation failed ! \n");
+				}
+			break;
+			case 'hosts':
+				if(self::setConfig($params[0],$params[1])){
+					exit(" Configuration file has been updated ! \n");
+				}else{
+					exit(" operation failed ! \n");
+				}
+			break;
+			case 'change':
+				$host = self::getConfig($params[0]);
+				if($host){
+					echo "change host : $host \n";
+					file_put_contents(self::HOST,$host);
+				}else{
+					exit("Failed to find the host ! \n");
+				}
+			break;
+			case 'list':
+			case '-l':
+				$hosts = array();
+				$list = self::getConfig();
+				if($list){
+					foreach($list as $key=>$val){
+						if(strstr($key,'global.host.')){
+							$hosts[] = $key." => ".$val;
+						}
+					}
+				}
+				
+				if(!$hosts){
+					$host = self::getConfig('global.SERVER_HOST');
+					$port = self::getConfig('global.SERVER_PORT');
+					if($host != '' && $port != ''){
+						$hosts[] = "global.SERVER_HOST: => " . implode(":",array($host,$port));
+					}else{
+						$hosts[] = "default host: => " . implode(":",array(self::SERVER_HOST,self::SERVER_PORT));
+					}
+				}
+				
+				echo "host list: \n";
+				foreach($hosts as $host){
+					echo "          $host \n";
+				}
+				exit;
+			break;
+			case 'view':
+			case 'host':
+			case '-v':
+				if(file_exists(self::HOST)){
+					echo "current host: " . file_get_contents(self::HOST)."\n";
+				}else{
+					$host = self::getConfig('global.SERVER_HOST');
+					$port = self::getConfig('global.SERVER_PORT');
+					if($host && $port){
+						echo "current host: " . implode(":",array($host,$port)) ."\n";
+					}else{
+						echo "current host: " . implode(":",array(self::SERVER_HOST,self::SERVER_PORT)) ."\n";
+					}
+				}
+				exit;
+			break;
+			case 'remove':
+				if(isset($params[0])){
+					$key = trim($params[0]);
+					if(strstr($key,'global.host.')){
+						$host = self::getConfig(trim($params[0]));
+						if($host){
+							self::removeConfig(trim($params[0]));
+							$currHost = file_get_contents(self::HOST);
+							if($host == $currHost){
+								unlink(self::HOST);
+							}
+						}
+					}
+					echo "host: $key is remove \n";
+				}else{
+					if(file_exists(self::HOST)){
+						unlink(self::HOST);
+					}
+					$list = self::getConfig();
+					if($list){
+						foreach($list as $key=>$val){
+							if(strstr($key,'global.host.')){
+								self::removeConfig($key);
+							}
+						}
+					}
+					echo "host remove all \n";
+				}
+				exit;
+			break;
+		}
+	}
+	
+	public static function add($path){
+		$starttime = microtime(true);
+		self::getFiles($path,function($filename){
+			
+			$indexFile = self::DATA_PATH . ltrim($filename,'.'); //index
+			$cacheFile = self::CACHE_PATH . ltrim($filename,'.');
+			$time = filemtime($filename);
+			
+			if(file_exists($indexFile)){
+				$indexTime = self::getMtime($filename);
+				if($indexTime == $time){
+					return false;
+				}
+			}
+			
+			if(!file_exists(dirname($cacheFile))){
+				mkdir(dirname($cacheFile),0777,true);
+			}
+			
+			self::createIndex($filename,$time);
+			
+			copy($filename,$cacheFile);
+			echo "add $filename \n";
+			
+		});
+		$endtime = microtime(true);
+		exit("add time: ".($endtime - $starttime));
+	}
+	
+	public static function commit($path = self::CACHE_PATH){
+		$starttime = microtime(true);
+		self::getFiles($path,function($filename){
+			$newfile = str_replace(self::CACHE_PATH,self::DATA_PATH,$filename);
+			if(!file_exists(dirname($newfile))){
+				mkdir(dirname($newfile),0777,true);
+			}
+			copy($filename,$newfile);
+			
+			$newfile = str_replace(self::CACHE_PATH,self::UPDATA_PATH,$filename);
+			if(!file_exists(dirname($newfile))){
+				mkdir(dirname($newfile),0777,true);
+			}
+			copy($filename,$newfile);
+			
+			echo "commit $filename \n";
+		});
+		self::clear(self::CACHE_PATH);
+		$endtime = microtime(true);
+		exit("commit time: ".($endtime - $starttime));
+	}
+	
+	public static function push($path = self::UPDATA_PATH){
+		$starttime = microtime(true);
+		self::connection();
+		
+		if(self::getAccessToken() == false){
+			self::remoteLogn();
+			return;
+		}
+		
+		self::getFiles($path,function($filename){
+			self::upload($filename);
+		});
+		if($path == self::UPDATA_PATH) self::clear(self::UPDATA_PATH);
+		$endtime = microtime(true);
+		exit("upload time: ".($endtime - $starttime));
+	}
+	
+	public static function pull($path = '.'){
+		$starttime = microtime(true);
+		self::connection();
+		
+		if(self::getAccessToken() == false){
+			self::remoteLogn();
+			return;
+		}
+
+		$data = array(
+			'command'=>'pull',
+			'access_token'=>self::getAccessToken(),
+			'data'=>array(
+				'path'=>$path
+			)
+		);
+		$package = self::encode($data);
+		
+		fwrite(self::$client, $package);
+
+		$recv_buffer = '';
+		$count = 0;
+		$isEndOf = false;
+		
+		while(!feof(self::$client)){
+			$buffer = fread(self::$client, 8192);
+			
+			if(substr($buffer,-3) == 'EOF'){
+				$buffer = rtrim($buffer,'EOF');
+				$isEndOf = true;
+			}
+			
+			$recv_buffer .= $buffer;
+			
+			while($recv_buffer != ''){
+				$total_len = self::input($recv_buffer);
+				if($total_len>0){
+					$buffer = substr($recv_buffer,0,$total_len);
+					if(strlen($buffer) < $total_len){
+						break;
+					}
+					
+					$recv_buffer = substr($recv_buffer,$total_len);
+					$data = self::decode($buffer);
+					call_user_func(array('gitFtpClient','onMessage'),$data);
+				}else{
+					break;
+				}
+			}
+			
+			if($isEndOf == true){
+				break;
+			}
+		}
+		
+		echo "file count: ".self::$packageCount . "\n";
+		$endtime = microtime(true);
+		exit("pull time: ".($endtime - $starttime));
+	}
+	
+	
+	public static function onMessage($data){
+		if($data){
+			if(isset($data['file_name'])){
+				
+				$pullPath = self::getConfig('global.PULL_PATH');
+				if(!$pullPath){
+					$pullPath = self::PULL_PATH;
+				}
+				
+				if(!is_dir(dirname($pullPath . $data['file_name']))){
+					mkdir(dirname($pullPath . $data['file_name']),0777,true);
+				}
+				file_put_contents($pullPath . $data['file_name'],$data['file_data']);
+				echo "pull $data[file_name] \n";
+				self::$packageCount ++;
+			}else{
+				if($data['command'] == 'loginOut'){
+					if(file_exists(self::TOKEN)){
+						unlink(self::TOKEN);
+					}
+				}
+				exit($data["errmsg"]);
+			}
+		}
+	}
+	
+	public static function remoteLogn(){
+		$account = self::getAccount();
+		$data = array();
+		$data['command'] = 'login';
+		$data['username'] = $account['global.username'];
+		$data['password'] = $account['global.password'];
+		
+		$package = self::encode($data);
+		fwrite(self::$client, $package);
+		
+		$buffer = fread(self::$client, 8192);
+		$data = self::decode($buffer);
+		
+		if($data){
+			if($data['errcode'] == 0){
+				file_put_contents(self::TOKEN,json_encode($data));
+			}
+		}
+		exit("remote login: ".$data['errmsg']);
+	}
+	
+	public static function encode($data = array()){
+		$command = $data['command'];
+		if(isset($data['access_token']) && $data['access_token'] != ''){
+			$access_token = $data['access_token'];
+			if(isset($data['data'])){
+				$data['data'] = Security::encrypt(json_encode($data['data']),$access_token);
+			}
+		}
+		$data = json_encode($data);
+		$data = gzcompress($data);
+		
+		$package = pack('NC', self::PACKAGE_HEAD_LEN  + strlen($command) + strlen($data), strlen($command)) . $command . $data;
+		return $package;
+	}
+	
+	public static function decode($buffer,$callback = null){
+		if($buffer != ''){
+			$package = unpack('Ntotal_len/Ccommand_len', $buffer);
+			if($package){
+				
+				$command_len = $package['command_len'];
+				$command = substr($buffer, self::PACKAGE_HEAD_LEN ,$command_len);
+				$buffer = substr($buffer, self::PACKAGE_HEAD_LEN + $command_len);
+				
+				$buffer = gzuncompress($buffer);
+				$data = json_decode($buffer,true);
+
+				if(isset($data['access_token']) && $data['access_token'] != ''){
+					$access_token = $data['access_token'];
+					
+					if(isset($data['data'])){
+									
+						$data = Security::decrypt($data['data'],$access_token);
+						$data = json_decode($data,true);
+						if(isset($data['file_data'])){
+							$data['file_data'] = base64_decode($data['file_data']);
+						}
+					}
+				}
+				
+				if(is_callable($callback)){
+					call_user_func($callback,$data);
+				}else{
+					return $data;
+				}
+
+			}
+		}
+	}
+	
+	public static function input($buffer){
+		if(strlen($buffer) < self::PACKAGE_HEAD_LEN){
+			return 0;
+		}
+		
+		$package = unpack('Ntotal_len/Ccommand_len', $buffer);
+		return $package['total_len'];
+	}
+	
+	public static function getAccessToken(){
+		if(!file_exists(self::TOKEN)){
+			return false;
+		}else{
+			$json = file_get_contents(self::TOKEN);
+			$data = json_decode($json,true);
+			if(isset($data['access_token'])){
+				return $data['access_token'];
+			}else{
+				return false;
+			}
+		}
+	}
+	
+	public static function upload($filename){
+		self::connection();
+		$file_data = file_get_contents($filename);
+		$filename = str_replace(self::UPDATA_PATH,'',$filename);
+		$filename = '/'.ltrim($filename,'/');
+		
+		$data = array();
+		$data['command'] = 'push';
+		$data['access_token'] = self::getAccessToken();
+		$data['data'] = array(
+			'file_name'=>$filename,
+			'file_data'=>base64_encode($file_data)
+		);
+		$package = self::encode($data);
+		fwrite(self::$client, $package);
+		
+		
+		$buffer = fread(self::$client, 8192);
+		if($buffer){
+			$res = self::decode($buffer);
+			echo $res['errmsg'] . "\n";
+		}
+	}
+	
+	public static function connection(){
+		if(self::$client == null){
+			
+			if(file_exists(self::HOST)){
+				$host = file_get_contents(self::HOST);
+				if($host){
+					list($host,$port) = explode(":",$host);
+				}
+			}else{
+				$host = self::getConfig('global.SERVER_HOST',self::SERVER_HOST);
+				$port = self::getConfig('global.SERVER_PORT',self::SERVER_PORT);
+			}
+			
+			self::$client = stream_socket_client(sprintf("%s:%s",$host,$port), $errno, $errmsg);
+			if(!self::$client){
+				exit("$errmsg\n");
+			}
+			// 设置成阻塞
+			stream_set_blocking(self::$client, 1);
+		}
+	}
+	
+	public static function account($key = 'global.username',$value){
+		if($key == 'global.username'){
+			file_put_contents(self::CONFIG,implode(" = ",array($key,$value))."\n");
+			exit(" Please enter your password ! ");
+		}elseif($key == 'global.password'){
+			file_put_contents(self::CONFIG,implode(" = ",array($key,md5($value)))."\n",FILE_APPEND);
+			exit(" Please enter your email ! ");
+		}elseif($key == 'global.email'){
+			file_put_contents(self::CONFIG,implode(" = ",array($key,$value)),FILE_APPEND);
+			exit(" Please enter your username password !");
+		}
+	}
+	
+	public static function setConfig($key,$value){
+		if(strstr($key,'global.')){
+			$data = array();		
+			if(file_exists(self::CONFIG)){
+				$lines = file(self::CONFIG);
+				if($lines){
+					foreach($lines as $k=>$line){
+						if($line != ''){
+							list($name,$val) = explode(" = ",$line);
+							if($name != '') $data[trim($name)] = trim($val);
+						}
+					}
+				}
+				$data[$key] = $value;
+			}else{
+				$data[$key] = $value;
+			}
+			
+			if($key == 'global.password'){
+				$data[$key] = md5($value);
+			}
+			
+			if($value == null){
+				unset($data[$key]);
+			}
+			
+			if($data){
+				$lines = array();
+				foreach($data as $key => $val){
+					$lines[] = sprintf("%s = %s",$key,$val);
+				}
+				if(is_writable(self::CONFIG)){
+					file_put_contents(self::CONFIG,implode("\n",$lines));
+					unset($data,$lines);
+				}else{
+					echo "There is no writable permissions for folders ! \n";
+					return false;
+				}
+			}
+			return true;
+			
+		}
+		return false;
+	}
+	
+	public static function getConfig($key = null,$value = null){
+		$data = array();
+		if(file_exists(self::CONFIG)){
+			$lines = file(self::CONFIG);
+			if($lines){
+				foreach($lines as $k=>$line){
+					if($line != ''){
+						list($name,$val) = explode(" = ",$line);
+						if($name != '') $data[trim($name)] = trim($val);
+					}
+				}
+			}
+			
+			if($key == null){
+				return $data;
+			}
+			
+			if(isset($data[$key])){
+				return $data[$key];
+			}else{
+				return $value;
+			}
+		}else{
+			return false;
+		}
+	}
+	
+	public static function removeConfig($key){
+		$data = self::getConfig();
+		if($data){
+			if(isset($data[$key])){
+				unset($data[$key]);
+			}else{
+				return false;
+			}
+		}else{
+			return false;
+		}
+		
+		if($data){
+			$lines = array();
+			foreach($data as $key => $val){
+				$lines[] = sprintf("%s = %s",$key,$val);
+			}
+			file_put_contents(self::CONFIG,implode("\n",$lines));
+			unset($data,$lines);
+		}
+		return true;
+	}
+	
+	public static function doLogin(){
+		exit(" Please enter your username password ! \n");
+	}
+	
+	public static function getAccount(){
+		if(!file_exists(self::CONFIG)){
+			exit(" Please set up your account ! \n");
+		}
+		
+		$account = array();
+		$data = file(self::CONFIG);
+		foreach($data as $line){
+			list($key,$value) = explode(" = ",$line);
+			$account[$key] = trim($value);
+		}
+		return $account;
+	}
+	
+	public static function login($username,$password){
+		
+		$account = self::getAccount();
+		
+		if($account['global.username'] == $username && $account['global.password'] == md5($password)){
+
+			$data = array();
+			$data['username'] = $username;
+			$data['login_time'] = date('Y-m-d H:i:s');
+			file_put_contents(self::USER,$username);
+			self::$loginStatus = true;
+			self::$username = $username;
+			
+			if(!file_exists(self::LOGIN)){
+				file_put_contents(self::LOGIN,json_encode($data)."\n",FILE_APPEND);
+			}else{
+				$lines = file(self::LOGIN);
+				foreach($lines as $k=>$json){
+					$user = json_decode($json,true);
+					if($username ==  $user['username']){
+						unset($lines[$k]);
+					}
+				}
+				
+				$lines[] = json_encode($data);
+				file_put_contents(self::LOGIN,implode("\n",$lines));
+			}
+		
+			exit(" login success !");
+		}else{
+			exit(" login fail !");
+		}
+	}
+
+	public static function checkLogin(){
+		
+		$username = self::getLoginUser();
+		if($username == false){
+			self::doLogin();
+		}
+		
+		if($username != ''){
+			if(!file_exists(self::LOGIN)){
+				self::doLogin();
+			}else{
+				$data = file(self::LOGIN);
+				foreach($data as $k=>$json){
+					$user = json_decode($json,true);
+					if($username ==  $user['username']){
+						$loginTime = $user['login_time'];
+						if((time() - strtotime($loginTime)) > 1800){
+							self::doLogin();
+						}else{
+							return true;
+						}
+					}
+				}
+				self::doLogin();
+			}
+		}
+	}
+
+	public static function getLoginUser(){
+		if(file_exists(self::USER)){
+			return trim(file_get_contents(self::USER));
+		}else{
+			return false;
+		}
+	}
+	
+	public static function displayHome(){
+		echo "================================================================== \n";
+		echo "---------------------------- GET FTP ----------------------------- \n";
+		echo "|                                                                 |\n";
+		echo "|                    GetFTP version: ". self::VERSION ."                        |\n";
+		echo "|                    PHP version: ". PHP_VERSION ."                           |\n";
+		echo "|                                                                 |\n";
+		echo "------------------------------------------------------------------ \n";
+		echo "================================================================== \n";
+	}
+	
+	public static function displayHelp(){
+		echo "================================================================== \n";
+		echo "                                                                   \n";
+		echo "getftp [help|-h] \n";
+		echo "getftp [version|-v] \n";
+		echo "getftp init \n";
+		echo "getftp config [global.username|global.password|global.email] [username|password|email] \n";
+		echo "getftp login [username] [password] \n";
+		echo "getftp remote add [global.SERVER_HOST] [127.0.0.1] \n";
+		echo "getftp remote add [global.SERVER_PORT] [21|8333] \n";
+		echo "getftp remote add [global.PULL_PATH] [.|path] \n";
+		echo "getftp remote hosts [global.host.name|global.host.local|global.host.127] [127.0.0.1:8333] \n";
+		echo "getftp remote change [global.host.name] \n";
+		echo "getftp remote [list|-l] \n";
+		echo "getftp remote [view|host|-v] \n";
+		echo "getftp remote remove [-global.host.name] \n";
+		echo "getftp add [path] \n";
+		echo "getftp commit -m ['remark'] \n";
+		echo "getftp push [-path] \n";
+		echo "getftp pull [-path] \n";
+		echo "                                                                   \n";
+		echo "================================================================== \n";
+		exit;
+	}
+	
+	public static function clear($path){
+		static $rootPath = null;
+		if($rootPath == null){
+			$rootPath = $path;
+		}
+		if(! is_dir($path)){ 
+			return false; 
+		} 
+		$handle = @opendir($path); 
+		while(($file = @readdir($handle)) !== false){ 
+			if($file != '.' && $file != '..'){ 
+				$dir = $path . '/' . $file; 
+				is_dir($dir) ? self::clear($dir) : @unlink($dir); 
+			} 
+		} 
+		closedir($handle);
+		if($path != $rootPath){
+			return rmdir($path);
+		}
+	}
+	
+	public static function  createIndex($filename,$time){
+		$index = md5($filename);
+		if(!is_dir(self::INDEX_PATH)){
+			mkdir(self::INDEX_PATH,0777,true);
+		}
+		file_put_contents(self::INDEX_PATH . $index,$time);
+	}
+
+	public static function  getMtime($filename){
+		$filename = md5($filename);
+		if(file_exists(self::INDEX_PATH . $filename)){
+			return file_get_contents(self::INDEX_PATH . $filename);
+		}else{
+			return false;
+		}
+	}
+	
+	public static function getFiles($path,$callback){
+		if(is_dir($path)){
+			$handle = dir($path);
+			while($filename = $handle->read()){
+				if($filename != '.' && $filename != '..' && $filename != '.git' && $filename != '.gitftp'){
+					$path = rtrim($path,'/') . '/';
+					if(is_dir($path . $filename)){
+						self::getFiles($path . $filename,$callback);
+					}else{
+						$filename = $path . $filename;
+						//$callback($filename);
+						call_user_func($callback,$filename);
+					}
+				}
+			}
+			$handle->close();
+		}else{
+			$callback($path);
+		}
+	}
+}
+
+//加密解密
+class Security{ 
+
+	public static function encrypt($input, $key) {
+		$size  = mcrypt_get_block_size(MCRYPT_RIJNDAEL_128, MCRYPT_MODE_ECB);
+		$input = Security::pkcs5_pad($input, $size);
+		$td    = mcrypt_module_open(MCRYPT_RIJNDAEL_128, '', MCRYPT_MODE_ECB, '');
+		$iv    = mcrypt_create_iv(mcrypt_enc_get_iv_size($td), MCRYPT_RAND);
+		mcrypt_generic_init($td, Security::hextobin($key), $iv);
+		$data = mcrypt_generic($td, $input);
+		mcrypt_generic_deinit($td);
+		mcrypt_module_close($td);
+		$data = base64_encode($data);
+		return $data;
+	}
+
+	/*
+	 * 解密
+	 */
+
+	public static function decrypt($sStr, $sKey) {
+		$decrypted = mcrypt_decrypt(MCRYPT_RIJNDAEL_128, Security::hextobin($sKey), base64_decode($sStr), MCRYPT_MODE_ECB);
+		$dec_s     = strlen($decrypted);
+		$padding   = ord($decrypted[$dec_s - 1]);
+		$decrypted = substr($decrypted, 0, -$padding);
+		return $decrypted;
+	}
+	
+	public static function pkcs5_pad($text, $blocksize) {
+		$pad = $blocksize - (strlen($text) % $blocksize);
+		return $text . str_repeat(chr($pad), $pad);
+	}	
+	
+	public static function hextobin($hexstr) {
+		$n    = strlen($hexstr);
+		$sbin = "";
+		$i    = 0;
+		while ($i < $n) {
+			$a = substr($hexstr, $i, 2);
+			$c = pack("H*", $a);
+			if ($i == 0) {
+				$sbin = $c;
+			} else {
+				$sbin .= $c;
+			}
+			$i += 2;
+		}
+		return $sbin;
+	}
+
+}
+?>

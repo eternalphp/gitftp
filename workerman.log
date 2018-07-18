@@ -1,0 +1,5 @@
+2018-07-12 18:51:06 pid:1 Worker process terminated with ERROR: E_ERROR "Call to a member function send() on null in E:\phpStudy\wwwroot\git.oschina.net\ServerFTP\ftpServer.php on line 31"
+2018-07-16 12:33:36 pid:1 Worker process terminated with ERROR: E_ERROR "Call to undefined function Workerman\Lib\getConfigPath() in E:\phpStudy\wwwroot\git.oschina.net\ServerFTP\Workerman\Lib\Config.php on line 36"
+2018-07-16 12:38:55 pid:1 Worker process terminated with ERROR: E_ERROR "Call to undefined function Workerman\Lib\getServerPath() in E:\phpStudy\wwwroot\git.oschina.net\ServerFTP\Workerman\Lib\Command.php on line 51"
+2018-07-16 13:23:08 pid:1 Worker process terminated with ERROR: E_ERROR "Call to undefined function Workerman\Lib\getFiles() in E:\phpStudy\wwwroot\git.oschina.net\ServerFTP\Workerman\Lib\Command.php on line 71"
+2018-07-16 13:24:41 pid:1 Worker process terminated with ERROR: E_ERROR "Call to undefined function Workerman\Lib\getFiles() in E:\phpStudy\wwwroot\git.oschina.net\ServerFTP\Workerman\Lib\Config.php on line 18"
